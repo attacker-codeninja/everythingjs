@@ -87,6 +87,11 @@ def download_regex():
     # Create the directory if it doesn't exist
     os.makedirs(everythingjs_dir, exist_ok=True)
 
+    # Check if the file already exists
+    if os.path.exists(secrets_file_path):
+        print(f"Using default regex located at {secrets_file_path}")
+        return
+
     # URL to the secrets.regex file
     secrets_url = 'https://raw.githubusercontent.com/profmoriarity/everythingjs/refs/heads/main/secrets.regex'
 
@@ -213,33 +218,24 @@ def is_nopelist(js_url):
 
 def fetch_js_links(url, headers):
     try:
+        if url.endswith(".js"):
+            return (url, [url]) if not is_nopelist(url) else None
+
         response = requests.get(url, headers=headers, timeout=3)
         response.raise_for_status()
-        
-        # Explicitly checking if content is non-empty before parsing
-        if response.text.strip():
-            soup = BeautifulSoup(response.text, 'html.parser')
-        else:
-            return None  # Return None if the response body is empty
+        if not response.text.strip():
+            return None
 
-        js_links = set()
-        
-        # Extract script tags with src attribute
-        for script in soup.find_all('script', src=True):
-            js_url = script['src']
-            # Convert relative URL to absolute URL using urljoin
-            full_url = urljoin(url, js_url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        js_links = {
+            urljoin(url, script['src'])
+            for script in soup.find_all('script', src=True)
+            if not is_nopelist(urljoin(url, script['src']))
+        }
 
-            # Ignore URLs that match any keyword in the nopelist
-            if not is_nopelist(full_url):
-                js_links.add(full_url)
-        
-        # Return only if there are JS links found
         return (url, list(js_links)) if js_links else None
-    except requests.RequestException as e:
-        #print(f"Error fetching URL {url}: {e}")
+    except requests.RequestException:
         return None
-
 
 # Load regex patterns from secrets.regex file
 def load_regex_patterns(file_path):
@@ -390,9 +386,13 @@ def run_flask_app(filename):
             if not js_url or not os.path.isfile(js_url):
                 continue
 
-            # Read the file and search for the keyword
-            with open(js_url, 'r') as js_file:
-                lines = js_file.readlines()
+            # Specify the encoding (e.g., 'utf-8', 'latin-1', etc.)
+            with open(js_url, 'r', encoding='utf-8') as js_file:
+                try:
+                    lines = js_file.readlines()
+                except UnicodeDecodeError:
+                    print("Error: Could not decode file. Please check the encoding.")
+
 
             for i, line in enumerate(lines):
                 if keyword in line:
@@ -863,7 +863,6 @@ def main():
     if args.verbose:
         print(f"[+] Running in verbose mode")
 
-    # Process URLs and extract JS links
     results, changed_results = process_urls(urls, headers, args.secrets_file, args.save_js, True, verbose=args.verbose, jsonl=args.jsonl, debug=args.debug)
     if args.slack_webhook:
         post_to_slack(args.slack_webhook, changed_results)
